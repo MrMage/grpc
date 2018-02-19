@@ -19,7 +19,6 @@
 #ifndef GRPC_SUPPORT_LOG_H
 #define GRPC_SUPPORT_LOG_H
 
-#include <inttypes.h>
 #include <stdarg.h>
 #include <stdlib.h> /* for abort() */
 
