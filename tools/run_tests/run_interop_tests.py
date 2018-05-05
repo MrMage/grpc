@@ -167,6 +167,36 @@ class CSharpCoreCLRLanguage:
         return 'csharpcoreclr'
 
 
+class DartLanguage:
+
+    def __init__(self):
+        self.client_cwd = '../grpc-dart/interop'
+        self.server_cwd = '../grpc-dart/interop'
+        self.http2_cwd = '../grpc-dart/interop'
+        self.safename = str(self)
+
+    def client_cmd(self, args):
+        return ['dart', 'bin/client.dart'] + args
+
+    def cloud_to_prod_env(self):
+        return {}
+
+    def server_cmd(self, args):
+        return ['dart', 'bin/server.dart'] + args
+
+    def global_env(self):
+        return {}
+
+    def unimplemented_test_cases(self):
+        return _SKIP_COMPRESSION
+
+    def unimplemented_test_cases_server(self):
+        return _SKIP_COMPRESSION
+
+    def __str__(self):
+        return 'dart'
+
+
 class JavaLanguage:
 
     def __init__(self):
@@ -355,6 +385,36 @@ class NodeLanguage:
         return 'node'
 
 
+class NodePureJSLanguage:
+
+    def __init__(self):
+        self.client_cwd = '../grpc-node'
+        self.server_cwd = '../grpc-node'
+        self.safename = str(self)
+
+    def client_cmd(self, args):
+        return [
+            'packages/grpc-native-core/deps/grpc/tools/run_tests/interop/with_nvm.sh',
+            'node', '--require', './test/fixtures/js_js',
+            'test/interop/interop_client.js'
+        ] + args
+
+    def cloud_to_prod_env(self):
+        return {}
+
+    def global_env(self):
+        return {}
+
+    def unimplemented_test_cases(self):
+        return _SKIP_COMPRESSION + _SKIP_DATA_FRAME_PADDING
+
+    def unimplemented_test_cases_server(self):
+        return []
+
+    def __str__(self):
+        return 'nodepurejs'
+
+
 class PHPLanguage:
 
     def __init__(self):
@@ -485,13 +545,13 @@ class PythonLanguage:
 
     def client_cmd(self, args):
         return [
-            'py27/bin/python', 'src/python/grpcio_tests/setup.py',
+            'py27_native/bin/python', 'src/python/grpcio_tests/setup.py',
             'run_interop', '--client', '--args="{}"'.format(' '.join(args))
         ]
 
     def client_cmd_http2interop(self, args):
         return [
-            'py27/bin/python',
+            'py27_native/bin/python',
             'src/python/grpcio_tests/tests/http2/negative_http2_client.py',
         ] + args
 
@@ -500,7 +560,7 @@ class PythonLanguage:
 
     def server_cmd(self, args):
         return [
-            'py27/bin/python', 'src/python/grpcio_tests/setup.py',
+            'py27_native/bin/python', 'src/python/grpcio_tests/setup.py',
             'run_interop', '--server', '--args="{}"'.format(' '.join(args))
         ]
 
@@ -524,10 +584,12 @@ _LANGUAGES = {
     'c++': CXXLanguage(),
     'csharp': CSharpLanguage(),
     'csharpcoreclr': CSharpCoreCLRLanguage(),
+    'dart': DartLanguage(),
     'go': GoLanguage(),
     'java': JavaLanguage(),
     'javaokhttp': JavaOkHttpClient(),
     'node': NodeLanguage(),
+    'nodepurejs': NodePureJSLanguage(),
     'php': PHPLanguage(),
     'php7': PHP7Language(),
     'objc': ObjcLanguage(),
@@ -537,7 +599,8 @@ _LANGUAGES = {
 
 # languages supported as cloud_to_cloud servers
 _SERVERS = [
-    'c++', 'node', 'csharp', 'csharpcoreclr', 'java', 'go', 'ruby', 'python'
+    'c++', 'node', 'csharp', 'csharpcoreclr', 'java', 'go', 'ruby', 'python',
+    'dart'
 ]
 
 _TEST_CASES = [
@@ -573,6 +636,14 @@ _HTTP2_SERVER_TEST_CASES_THAT_USE_GRPC_CLIENTS = _GRPC_CLIENT_TEST_CASES_FOR_HTT
 _LANGUAGES_WITH_HTTP2_CLIENTS_FOR_HTTP2_SERVER_TEST_CASES = [
     'java', 'go', 'python', 'c++'
 ]
+
+#TODO: Add c++ when c++ ALTS interop client is ready.
+_LANGUAGES_FOR_ALTS_TEST_CASES = ['java', 'go']
+
+#TODO: Add c++ when c++ ALTS interop server is ready.
+_SERVERS_FOR_ALTS_TEST_CASES = ['java', 'go']
+
+_TRANSPORT_SECURITY_OPTIONS = ['tls', 'alts', 'insecure']
 
 DOCKER_WORKDIR_ROOT = '/var/local/git/grpc'
 
@@ -644,7 +715,7 @@ def auth_options(language, test_case):
     if test_case in ['jwt_token_creds', 'per_rpc_creds', 'oauth2_auth_token']:
         if language in [
                 'csharp', 'csharpcoreclr', 'node', 'php', 'php7', 'python',
-                'ruby'
+                'ruby', 'nodepurejs'
         ]:
             env['GOOGLE_APPLICATION_CREDENTIALS'] = key_filepath
         else:
@@ -736,14 +807,22 @@ def cloud_to_cloud_jobspec(language,
                            server_host,
                            server_port,
                            docker_image=None,
-                           insecure=False,
+                           transport_security='tls',
                            manual_cmd_log=None):
     """Creates jobspec for cloud-to-cloud interop test"""
     interop_only_options = [
         '--server_host_override=foo.test.google.fr',
-        '--use_tls=%s' % ('false' if insecure else 'true'),
         '--use_test_ca=true',
     ]
+    if transport_security == 'tls':
+        interop_only_options += ['--use_tls=true']
+    elif transport_security == 'alts':
+        interop_only_options += ['--use_tls=false', '--use_alts=true']
+    elif transport_security == 'insecure':
+        interop_only_options += ['--use_tls=false']
+    else:
+        print('Invalid transport security option.')
+        sys.exit(1)
 
     client_test_case = test_case
     if test_case in _HTTP2_SERVER_TEST_CASES_THAT_USE_GRPC_CLIENTS:
@@ -808,15 +887,24 @@ def cloud_to_cloud_jobspec(language,
     return test_job
 
 
-def server_jobspec(language, docker_image, insecure=False, manual_cmd_log=None):
+def server_jobspec(language,
+                   docker_image,
+                   transport_security='tls',
+                   manual_cmd_log=None):
     """Create jobspec for running a server"""
     container_name = dockerjob.random_name(
         'interop_server_%s' % language.safename)
-    cmdline = bash_cmdline(
-        language.server_cmd([
-            '--port=%s' % _DEFAULT_SERVER_PORT,
-            '--use_tls=%s' % ('false' if insecure else 'true')
-        ]))
+    server_cmd = ['--port=%s' % _DEFAULT_SERVER_PORT]
+    if transport_security == 'tls':
+        server_cmd += ['--use_tls=true']
+    elif transport_security == 'alts':
+        server_cmd += ['--use_tls=false', '--use_alts=true']
+    elif transport_security == 'insecure':
+        server_cmd += ['--use_tls=false']
+    else:
+        print('Invalid transport security option.')
+        sys.exit(1)
+    cmdline = bash_cmdline(language.server_cmd(server_cmd))
     environ = language.global_env()
     docker_args = ['--name=%s' % container_name]
     if language.safename == 'http2':
@@ -1023,11 +1111,13 @@ argp.add_argument(
     'Enable HTTP/2 server edge case testing. (Includes positive and negative tests'
 )
 argp.add_argument(
-    '--insecure',
-    default=False,
-    action='store_const',
+    '--transport_security',
+    choices=_TRANSPORT_SECURITY_OPTIONS,
+    default='tls',
+    type=str,
+    nargs='?',
     const=True,
-    help='Whether to use secure channel.')
+    help='Which transport security mechanism to use.')
 argp.add_argument(
     '--internal_ci',
     default=False,
@@ -1047,6 +1137,9 @@ servers = set(
     s
     for s in itertools.chain.from_iterable(
         _SERVERS if x == 'all' else [x] for x in args.server))
+# ALTS servers are only available for certain languages.
+if args.transport_security == 'alts':
+    servers = servers.intersection(_SERVERS_FOR_ALTS_TEST_CASES)
 
 if args.use_docker:
     if not args.travis:
@@ -1076,6 +1169,10 @@ all_but_objc = set(six.iterkeys(_LANGUAGES)) - set(['objc'])
 languages = set(_LANGUAGES[l]
                 for l in itertools.chain.from_iterable(
                     all_but_objc if x == 'all' else [x] for x in args.language))
+# ALTS interop clients are only available for certain languages.
+if args.transport_security == 'alts':
+    alts_languages = set(_LANGUAGES[l] for l in _LANGUAGES_FOR_ALTS_TEST_CASES)
+    languages = languages.intersection(alts_languages)
 
 languages_http2_clients_for_http2_server_interop = set()
 if args.http2_server_interop:
@@ -1144,7 +1241,7 @@ try:
         spec = server_jobspec(
             _LANGUAGES[lang],
             docker_images.get(lang),
-            args.insecure,
+            args.transport_security,
             manual_cmd_log=server_manual_cmd_log)
         if not args.manual_run:
             job = dockerjob.DockerJob(spec)
@@ -1172,7 +1269,7 @@ try:
 
     jobs = []
     if args.cloud_to_prod:
-        if args.insecure:
+        if args.transport_security != 'tls':
             print('TLS is always enabled for cloud_to_prod scenarios.')
         for server_host_name in args.prod_servers:
             for language in languages:
@@ -1200,7 +1297,7 @@ try:
                     jobs.append(test_job)
 
     if args.cloud_to_prod_auth:
-        if args.insecure:
+        if args.transport_security != 'tls':
             print('TLS is always enabled for cloud_to_prod scenarios.')
         for server_host_name in args.prod_servers:
             for language in languages:
@@ -1238,7 +1335,7 @@ try:
                             server_host,
                             server_port,
                             docker_image=docker_images.get(str(language)),
-                            insecure=args.insecure,
+                            transport_security=args.transport_security,
                             manual_cmd_log=client_manual_cmd_log)
                         jobs.append(test_job)
 
@@ -1254,7 +1351,7 @@ try:
                     server_host,
                     server_port,
                     docker_image=docker_images.get(str(http2Interop)),
-                    insecure=args.insecure,
+                    transport_security=args.transport_security,
                     manual_cmd_log=client_manual_cmd_log)
                 jobs.append(test_job)
 
@@ -1290,11 +1387,12 @@ try:
                     server_port = _DEFAULT_SERVER_PORT + offset
                     if not args.manual_run:
                         server_port = http2_server_job.mapped_port(server_port)
-                    if not args.insecure:
-                        print((
-                            'Creating grpc cient to http2 server test case with insecure connection, even though'
-                            ' args.insecure is False. Http2 test server only supports insecure connections.'
-                        ))
+                    if args.transport_security != 'insecure':
+                        print(
+                            ('Creating grpc client to http2 server test case '
+                             'with insecure connection, even though '
+                             'args.transport_security is not insecure. Http2 '
+                             'test server only supports insecure connections.'))
                     test_job = cloud_to_cloud_jobspec(
                         language,
                         test_case,
@@ -1302,7 +1400,7 @@ try:
                         'localhost',
                         server_port,
                         docker_image=docker_images.get(str(language)),
-                        insecure=True,
+                        transport_security='insecure',
                         manual_cmd_log=client_manual_cmd_log)
                     jobs.append(test_job)
 

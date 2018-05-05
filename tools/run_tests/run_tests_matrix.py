@@ -37,6 +37,9 @@ _CPP_RUNTESTS_TIMEOUT = 4 * 60 * 60
 # C++ TSAN takes longer than other sanitizers
 _CPP_TSAN_RUNTESTS_TIMEOUT = 8 * 60 * 60
 
+# Set timeout high for ObjC for Cocoapods to install pods
+_OBJC_RUNTESTS_TIMEOUT = 90 * 60
+
 # Number of jobs assigned to each run_tests.py instance
 _DEFAULT_INNER_JOBS = 2
 
@@ -44,14 +47,19 @@ _DEFAULT_INNER_JOBS = 2
 _REPORT_SUFFIX = 'sponge_log.xml'
 
 
+def _safe_report_name(name):
+    """Reports with '+' in target name won't show correctly in ResultStore"""
+    return name.replace('+', 'p')
+
+
 def _report_filename(name):
     """Generates report file name"""
-    return 'report_%s_%s' % (name, _REPORT_SUFFIX)
+    return 'report_%s_%s' % (_safe_report_name(name), _REPORT_SUFFIX)
 
 
 def _report_filename_internal_ci(name):
     """Generates report file name that leads to better presentation by internal CI"""
-    return '%s/%s' % (name, _REPORT_SUFFIX)
+    return '%s/%s' % (_safe_report_name(name), _REPORT_SUFFIX)
 
 
 def _docker_jobspec(name,
@@ -68,7 +76,7 @@ def _docker_jobspec(name,
             '-j',
             str(inner_jobs), '-x',
             _report_filename(name), '--report_suite_name',
-            '%s' % name
+            '%s' % _safe_report_name(name)
         ] + runtests_args,
         environ=runtests_envs,
         shortname='run_tests_%s' % name,
@@ -95,7 +103,7 @@ def _workspace_jobspec(name,
             '-t', '-j',
             str(inner_jobs), '-x',
             '../%s' % _report_filename(name), '--report_suite_name',
-            '%s' % name
+            '%s' % _safe_report_name(name)
         ] + runtests_args,
         environ=env,
         shortname='run_tests_%s' % name,
@@ -106,7 +114,7 @@ def _workspace_jobspec(name,
 def _generate_jobs(languages,
                    configs,
                    platforms,
-                   iomgr_platform='native',
+                   iomgr_platforms=['native'],
                    arch=None,
                    compiler=None,
                    labels=[],
@@ -117,48 +125,60 @@ def _generate_jobs(languages,
     result = []
     for language in languages:
         for platform in platforms:
-            for config in configs:
-                name = '%s_%s_%s_%s' % (language, platform, config,
-                                        iomgr_platform)
-                runtests_args = [
-                    '-l', language, '-c', config, '--iomgr_platform',
-                    iomgr_platform
-                ]
-                if arch or compiler:
-                    name += '_%s_%s' % (arch, compiler)
-                    runtests_args += ['--arch', arch, '--compiler', compiler]
-                if '--build_only' in extra_args:
-                    name += '_buildonly'
-                for extra_env in extra_envs:
-                    name += '_%s_%s' % (extra_env, extra_envs[extra_env])
+            for iomgr_platform in iomgr_platforms:
+                for config in configs:
+                    name = '%s_%s_%s_%s' % (language, platform, config,
+                                            iomgr_platform)
+                    runtests_args = [
+                        '-l', language, '-c', config, '--iomgr_platform',
+                        iomgr_platform
+                    ]
+                    if arch or compiler:
+                        name += '_%s_%s' % (arch, compiler)
+                        runtests_args += [
+                            '--arch', arch, '--compiler', compiler
+                        ]
+                    if '--build_only' in extra_args:
+                        name += '_buildonly'
+                    for extra_env in extra_envs:
+                        name += '_%s_%s' % (extra_env, extra_envs[extra_env])
 
-                runtests_args += extra_args
-                if platform == 'linux':
-                    job = _docker_jobspec(
-                        name=name,
-                        runtests_args=runtests_args,
-                        runtests_envs=extra_envs,
-                        inner_jobs=inner_jobs,
-                        timeout_seconds=timeout_seconds)
-                else:
-                    job = _workspace_jobspec(
-                        name=name,
-                        runtests_args=runtests_args,
-                        runtests_envs=extra_envs,
-                        inner_jobs=inner_jobs,
-                        timeout_seconds=timeout_seconds)
+                    runtests_args += extra_args
+                    if platform == 'linux':
+                        job = _docker_jobspec(
+                            name=name,
+                            runtests_args=runtests_args,
+                            runtests_envs=extra_envs,
+                            inner_jobs=inner_jobs,
+                            timeout_seconds=timeout_seconds)
+                    else:
+                        job = _workspace_jobspec(
+                            name=name,
+                            runtests_args=runtests_args,
+                            runtests_envs=extra_envs,
+                            inner_jobs=inner_jobs,
+                            timeout_seconds=timeout_seconds)
 
-                job.labels = [platform, config, language, iomgr_platform
-                             ] + labels
-                result.append(job)
+                    job.labels = [platform, config, language, iomgr_platform
+                                 ] + labels
+                    result.append(job)
     return result
 
 
 def _create_test_jobs(extra_args=[], inner_jobs=_DEFAULT_INNER_JOBS):
     test_jobs = []
+    # sanity tests
+    test_jobs += _generate_jobs(
+        languages=['sanity'],
+        configs=['dbg', 'opt'],
+        platforms=['linux'],
+        labels=['basictests'],
+        extra_args=extra_args,
+        inner_jobs=inner_jobs)
+
     # supported on linux only
     test_jobs += _generate_jobs(
-        languages=['sanity', 'php7'],
+        languages=['php7'],
         configs=['dbg', 'opt'],
         platforms=['linux'],
         labels=['basictests', 'multilang'],
@@ -176,9 +196,18 @@ def _create_test_jobs(extra_args=[], inner_jobs=_DEFAULT_INNER_JOBS):
         timeout_seconds=_CPP_RUNTESTS_TIMEOUT)
 
     test_jobs += _generate_jobs(
-        languages=['csharp', 'python'],
+        languages=['csharp'],
         configs=['dbg', 'opt'],
         platforms=['linux', 'macos', 'windows'],
+        labels=['basictests', 'multilang'],
+        extra_args=extra_args,
+        inner_jobs=inner_jobs)
+
+    test_jobs += _generate_jobs(
+        languages=['python'],
+        configs=['opt'],
+        platforms=['linux', 'macos', 'windows'],
+        iomgr_platforms=['native', 'gevent'],
         labels=['basictests', 'multilang'],
         extra_args=extra_args,
         inner_jobs=inner_jobs)
@@ -208,7 +237,8 @@ def _create_test_jobs(extra_args=[], inner_jobs=_DEFAULT_INNER_JOBS):
         platforms=['macos'],
         labels=['basictests', 'multilang'],
         extra_args=extra_args,
-        inner_jobs=inner_jobs)
+        inner_jobs=inner_jobs,
+        timeout_seconds=_OBJC_RUNTESTS_TIMEOUT)
 
     # sanitizers
     test_jobs += _generate_jobs(
@@ -255,7 +285,8 @@ def _create_portability_test_jobs(extra_args=[],
 
     # portability C and C++ on x64
     for compiler in [
-            'gcc4.8', 'gcc5.3', 'gcc_musl', 'clang3.5', 'clang3.6', 'clang3.7'
+            'gcc4.8', 'gcc5.3', 'gcc7.2', 'gcc_musl', 'clang3.5', 'clang3.6',
+            'clang3.7'
     ]:
         test_jobs += _generate_jobs(
             languages=['c', 'c++'],
@@ -367,7 +398,7 @@ def _create_portability_test_jobs(extra_args=[],
         languages=['c'],
         configs=['dbg'],
         platforms=['linux'],
-        iomgr_platform='uv',
+        iomgr_platforms=['uv'],
         labels=['portability', 'corelang'],
         extra_args=extra_args,
         inner_jobs=inner_jobs,

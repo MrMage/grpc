@@ -29,9 +29,9 @@
 #include <grpc/grpc.h>
 #include <grpc/support/alloc.h>
 #include <grpc/support/log.h>
-#include <grpc/support/thd.h>
-#include <grpc/support/useful.h>
 
+#include "src/core/lib/gpr/useful.h"
+#include "src/core/lib/gprpp/thd.h"
 #include "src/core/lib/iomgr/iomgr.h"
 #include "test/core/util/test_config.h"
 
@@ -98,7 +98,7 @@ static void test_pollset_init(test_pollset* pollsets, int num_pollsets) {
 }
 
 static void destroy_pollset(void* p, grpc_error* error) {
-  grpc_pollset_destroy((grpc_pollset*)p);
+  grpc_pollset_destroy(static_cast<grpc_pollset*>(p));
 }
 
 static void test_pollset_cleanup(test_pollset* pollsets, int num_pollsets) {
@@ -259,11 +259,10 @@ static void test_threading(void) {
   shared.pollset = static_cast<grpc_pollset*>(gpr_zalloc(grpc_pollset_size()));
   grpc_pollset_init(shared.pollset, &shared.mu);
 
-  gpr_thd_id thds[10];
-  for (size_t i = 0; i < GPR_ARRAY_SIZE(thds); i++) {
-    gpr_thd_options opt = gpr_thd_options_default();
-    gpr_thd_options_set_joinable(&opt);
-    gpr_thd_new(&thds[i], "test_thread", test_threading_loop, &shared, &opt);
+  grpc_core::Thread thds[10];
+  for (auto& th : thds) {
+    th = grpc_core::Thread("test_thread", test_threading_loop, &shared);
+    th.Start();
   }
   grpc_wakeup_fd fd;
   GPR_ASSERT(GRPC_LOG_IF_ERROR("wakeup_fd_init", grpc_wakeup_fd_init(&fd)));
@@ -280,8 +279,8 @@ static void test_threading(void) {
   }
   GPR_ASSERT(GRPC_LOG_IF_ERROR("wakeup_first",
                                grpc_wakeup_fd_wakeup(shared.wakeup_fd)));
-  for (size_t i = 0; i < GPR_ARRAY_SIZE(thds); i++) {
-    gpr_thd_join(thds[i]);
+  for (auto& th : thds) {
+    th.Join();
   }
   fd.read_fd = 0;
   grpc_wakeup_fd_destroy(&fd);

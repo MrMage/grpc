@@ -18,10 +18,15 @@ load("//bazel:grpc_build_system.bzl", "grpc_proto_library", "grpc_package")
 
 grpc_package(name = "testing", visibility = "public")
 
+exports_files([
+    "echo.proto",
+    "echo_messages.proto",
+])
+
 grpc_proto_library(
     name = "compiler_test_proto",
     srcs = ["compiler_test.proto"],
-    generate_mock = True,
+    generate_mocks = True,
 )
 
 grpc_proto_library(
@@ -44,7 +49,7 @@ grpc_proto_library(
     name = "echo_proto",
     srcs = ["echo.proto"],
     deps = ["echo_messages_proto"],
-    generate_mock = True,
+    generate_mocks = True,
 )
 
 grpc_proto_library(

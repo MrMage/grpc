@@ -12,7 +12,7 @@
     <email>grpc-packages@google.com</email>
     <active>yes</active>
    </lead>
-   <date>2018-01-23</date>
+   <date>2018-01-19</date>
    <time>16:06:07</time>
    <version>
     <release>${settings.php_version.php()}</release>
@@ -24,10 +24,7 @@
    </stability>
    <license>Apache 2.0</license>
    <notes>
-  - Updated gRPC C Core library version 1.9
-  - Report grpc extension version in phpinfo() #13687
-  - Fixed memory leak when handling metadata array #13660
-  - Fixed memory involing persistent channels #14125 - #14130
+  - TBD
    </notes>
    <contents>
     <dir baseinstalldir="/" name="/">

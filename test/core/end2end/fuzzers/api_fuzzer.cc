@@ -93,7 +93,7 @@ static char* read_string(input_stream* inp, bool* special) {
       cap = GPR_MAX(3 * cap / 2, cap + 8);
       str = static_cast<char*>(gpr_realloc(str, cap));
     }
-    c = (char)next_byte(inp);
+    c = static_cast<char>(next_byte(inp));
     str[sz++] = c;
   } while (c != 0 && c != 1);
   if (special != nullptr) {
@@ -116,7 +116,7 @@ static void read_buffer(input_stream* inp, char** buffer, size_t* length,
   }
   *buffer = static_cast<char*>(gpr_malloc(*length));
   for (size_t i = 0; i < *length; i++) {
-    (*buffer)[i] = (char)next_byte(inp);
+    (*buffer)[i] = static_cast<char>(next_byte(inp));
   }
 }
 
@@ -192,7 +192,9 @@ static grpc_byte_buffer* read_message(input_stream* inp) {
   return out;
 }
 
-static int read_int(input_stream* inp) { return (int)read_uint32(inp); }
+static int read_int(input_stream* inp) {
+  return static_cast<int>(read_uint32(inp));
+}
 
 static grpc_channel_args* read_args(input_stream* inp) {
   size_t n = next_byte(inp);
@@ -424,6 +426,9 @@ void my_resolve_address(const char* addr, const char* default_port,
       GRPC_CLOSURE_CREATE(finish_resolve, r, grpc_schedule_on_exec_ctx));
 }
 
+static grpc_address_resolver_vtable fuzzer_resolver = {my_resolve_address,
+                                                       nullptr};
+
 grpc_ares_request* my_dns_lookup_ares(const char* dns_server, const char* addr,
                                       const char* default_port,
                                       grpc_pollset_set* interested_parties,
@@ -444,12 +449,6 @@ grpc_ares_request* my_dns_lookup_ares(const char* dns_server, const char* addr,
 
 ////////////////////////////////////////////////////////////////////////////////
 // client connection
-
-// defined in tcp_client_posix.c
-extern void (*grpc_tcp_client_connect_impl)(
-    grpc_closure* closure, grpc_endpoint** ep,
-    grpc_pollset_set* interested_parties, const grpc_channel_args* channel_args,
-    const grpc_resolved_address* addr, grpc_millis deadline);
 
 static void sched_connect(grpc_closure* closure, grpc_endpoint** ep,
                           gpr_timespec deadline);
@@ -511,6 +510,8 @@ static void my_tcp_client_connect(grpc_closure* closure, grpc_endpoint** ep,
                 grpc_millis_to_timespec(deadline, GPR_CLOCK_MONOTONIC));
 }
 
+grpc_tcp_client_vtable fuzz_tcp_client_vtable = {my_tcp_client_connect};
+
 ////////////////////////////////////////////////////////////////////////////////
 // test driver
 
@@ -529,10 +530,12 @@ static validator* create_validator(void (*validate)(void* arg, bool success),
 
 static void assert_success_and_decrement(void* counter, bool success) {
   GPR_ASSERT(success);
-  --*(int*)counter;
+  --*static_cast<int*>(counter);
 }
 
-static void decrement(void* counter, bool success) { --*(int*)counter; }
+static void decrement(void* counter, bool success) {
+  --*static_cast<int*>(counter);
+}
 
 typedef struct connectivity_watch {
   int* counter;
@@ -576,6 +579,7 @@ typedef struct call_state {
   grpc_slice recv_status_details;
   int cancelled;
   int pending_ops;
+  bool sent_initial_metadata;
   grpc_call_details call_details;
   grpc_byte_buffer* send_message;
   // starts at 0, individual flags from DONE_FLAG_xxx are set
@@ -748,7 +752,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (squelch && grpc_trace_fuzzer == nullptr) gpr_set_log_function(dont_log);
   gpr_free(grpc_trace_fuzzer);
   input_stream inp = {data, data + size};
-  grpc_tcp_client_connect_impl = my_tcp_client_connect;
+  grpc_set_tcp_client_impl(&fuzz_tcp_client_vtable);
   gpr_now_impl = now_impl;
   grpc_init();
   grpc_timer_manager_set_threading(false);
@@ -756,7 +760,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     grpc_core::ExecCtx exec_ctx;
     grpc_executor_set_threading(false);
   }
-  grpc_resolve_address = my_resolve_address;
+  grpc_set_resolver_impl(&fuzzer_resolver);
   grpc_dns_lookup_ares = my_dns_lookup_ares;
 
   GPR_ASSERT(g_channel == nullptr);
@@ -1022,11 +1026,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
               ok = false;
               break;
             case GRPC_OP_SEND_INITIAL_METADATA:
-              op->op = GRPC_OP_SEND_INITIAL_METADATA;
-              has_ops |= 1 << GRPC_OP_SEND_INITIAL_METADATA;
-              read_metadata(&inp, &op->data.send_initial_metadata.count,
-                            &op->data.send_initial_metadata.metadata,
-                            g_active_call);
+              if (g_active_call->sent_initial_metadata) {
+                ok = false;
+              } else {
+                g_active_call->sent_initial_metadata = true;
+                op->op = GRPC_OP_SEND_INITIAL_METADATA;
+                has_ops |= 1 << GRPC_OP_SEND_INITIAL_METADATA;
+                read_metadata(&inp, &op->data.send_initial_metadata.count,
+                              &op->data.send_initial_metadata.metadata,
+                              g_active_call);
+              }
               break;
             case GRPC_OP_SEND_MESSAGE:
               op->op = GRPC_OP_SEND_MESSAGE;
@@ -1063,9 +1072,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
                   &g_active_call->recv_initial_metadata;
               break;
             case GRPC_OP_RECV_MESSAGE:
-              op->op = GRPC_OP_RECV_MESSAGE;
-              has_ops |= 1 << GRPC_OP_RECV_MESSAGE;
-              op->data.recv_message.recv_message = &g_active_call->recv_message;
+              if (g_active_call->done_flags & DONE_FLAG_CALL_CLOSED) {
+                ok = false;
+              } else {
+                op->op = GRPC_OP_RECV_MESSAGE;
+                has_ops |= 1 << GRPC_OP_RECV_MESSAGE;
+                op->data.recv_message.recv_message =
+                    &g_active_call->recv_message;
+              }
               break;
             case GRPC_OP_RECV_STATUS_ON_CLIENT:
               op->op = GRPC_OP_RECV_STATUS_ON_CLIENT;

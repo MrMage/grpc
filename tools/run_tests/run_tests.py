@@ -204,19 +204,28 @@ def _is_use_docker_child():
 
 
 _PythonConfigVars = collections.namedtuple('_ConfigVars', [
-    'shell', 'builder', 'builder_prefix_arguments', 'venv_relative_python',
-    'toolchain', 'runner'
+    'shell',
+    'builder',
+    'builder_prefix_arguments',
+    'venv_relative_python',
+    'toolchain',
+    'runner',
+    'test_name',
+    'iomgr_platform',
 ])
 
 
 def _python_config_generator(name, major, minor, bits, config_vars):
+    name += '_' + config_vars.iomgr_platform
     return PythonConfig(
         name, config_vars.shell + config_vars.builder +
         config_vars.builder_prefix_arguments + [
             _python_pattern_function(major=major, minor=minor, bits=bits)
         ] + [name] + config_vars.venv_relative_python + config_vars.toolchain,
-        config_vars.shell + config_vars.runner +
-        [os.path.join(name, config_vars.venv_relative_python[0])])
+        config_vars.shell + config_vars.runner + [
+            os.path.join(name, config_vars.venv_relative_python[0]),
+            config_vars.test_name
+        ])
 
 
 def _pypy_config_generator(name, major, config_vars):
@@ -281,7 +290,7 @@ class CLanguage(object):
             self._docker_distro, self._make_options = self._compiler_options(
                 self.args.use_docker, self.args.compiler)
         if args.iomgr_platform == "uv":
-            cflags = '-DGRPC_UV -DGRPC_UV_THREAD_CHECK'
+            cflags = '-DGRPC_UV -DGRPC_CUSTOM_IOMGR_THREAD_CHECK -DGRPC_CUSTOM_SOCKET '
             try:
                 cflags += subprocess.check_output(
                     ['pkg-config', '--cflags', 'libuv']).strip() + ' '
@@ -507,6 +516,8 @@ class CLanguage(object):
             return ('jessie', self._gcc_make_options(version_suffix='-4.8'))
         elif compiler == 'gcc5.3':
             return ('ubuntu1604', [])
+        elif compiler == 'gcc7.2':
+            return ('ubuntu1710', [])
         elif compiler == 'gcc_musl':
             return ('alpine', [])
         elif compiler == 'clang3.4':
@@ -768,12 +779,16 @@ class PythonLanguage(object):
             venv_relative_python = ['bin/python']
             toolchain = ['unix']
 
+        test_command = 'test_lite'
+        if args.iomgr_platform == 'gevent':
+            test_command = 'test_gevent'
         runner = [
             os.path.abspath('tools/run_tests/helper_scripts/run_python.sh')
         ]
-        config_vars = _PythonConfigVars(shell, builder,
-                                        builder_prefix_arguments,
-                                        venv_relative_python, toolchain, runner)
+
+        config_vars = _PythonConfigVars(
+            shell, builder, builder_prefix_arguments, venv_relative_python,
+            toolchain, runner, test_command, args.iomgr_platform)
         python27_config = _python_config_generator(
             name='py27',
             major='2',
@@ -1327,8 +1342,8 @@ argp.add_argument(
 argp.add_argument(
     '--compiler',
     choices=[
-        'default', 'gcc4.4', 'gcc4.6', 'gcc4.8', 'gcc4.9', 'gcc5.3', 'gcc_musl',
-        'clang3.4', 'clang3.5', 'clang3.6', 'clang3.7', 'python2.7',
+        'default', 'gcc4.4', 'gcc4.6', 'gcc4.8', 'gcc4.9', 'gcc5.3', 'gcc7.2',
+        'gcc_musl', 'clang3.4', 'clang3.5', 'clang3.6', 'clang3.7', 'python2.7',
         'python3.4', 'python3.5', 'python3.6', 'pypy', 'pypy3', 'python_alpine',
         'all_the_cpythons', 'electron1.3', 'electron1.6', 'coreclr', 'cmake',
         'cmake_vs2015', 'cmake_vs2017'
@@ -1339,7 +1354,7 @@ argp.add_argument(
 )
 argp.add_argument(
     '--iomgr_platform',
-    choices=['native', 'uv'],
+    choices=['native', 'uv', 'gevent'],
     default='native',
     help='Selects iomgr platform to build on')
 argp.add_argument(

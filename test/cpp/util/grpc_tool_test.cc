@@ -21,16 +21,17 @@
 #include <sstream>
 
 #include <gflags/gflags.h>
-#include <grpc++/channel.h>
-#include <grpc++/client_context.h>
-#include <grpc++/create_channel.h>
-#include <grpc++/ext/proto_server_reflection_plugin.h>
-#include <grpc++/server.h>
-#include <grpc++/server_builder.h>
-#include <grpc++/server_context.h>
 #include <grpc/grpc.h>
+#include <grpcpp/channel.h>
+#include <grpcpp/client_context.h>
+#include <grpcpp/create_channel.h>
+#include <grpcpp/ext/proto_server_reflection_plugin.h>
+#include <grpcpp/server.h>
+#include <grpcpp/server_builder.h>
+#include <grpcpp/server_context.h>
 #include <gtest/gtest.h>
 
+#include "src/core/lib/gpr/env.h"
 #include "src/proto/grpc/testing/echo.grpc.pb.h"
 #include "src/proto/grpc/testing/echo.pb.h"
 #include "test/core/util/port.h"
@@ -87,6 +88,7 @@ DECLARE_bool(l);
 DECLARE_bool(batch);
 DECLARE_string(metadata);
 DECLARE_string(protofiles);
+DECLARE_string(proto_path);
 
 namespace {
 
@@ -707,6 +709,10 @@ TEST_F(GrpcToolTest, CallCommandWithBadMetadata) {
   const char* argv[] = {"grpc_cli", "call", "localhost:10000", "Echo",
                         "message: 'Hello'"};
   FLAGS_protofiles = "src/proto/grpc/testing/echo.proto";
+  char* test_srcdir = gpr_getenv("TEST_SRCDIR");
+  if (test_srcdir != nullptr) {
+    FLAGS_proto_path = test_srcdir + std::string("/com_github_grpc_grpc");
+  }
 
   {
     std::stringstream output_stream;

@@ -23,13 +23,12 @@
 #include <grpc/support/alloc.h>
 #include <grpc/support/log.h>
 #include <grpc/support/string_util.h>
-#include <grpc/support/useful.h>
 
 #include "src/core/lib/gpr/env.h"
 #include "src/core/lib/gpr/string.h"
 #include "src/core/lib/gpr/tmpfile.h"
 #include "src/core/lib/security/context/security_context.h"
-#include "src/core/lib/security/transport/security_connector.h"
+#include "src/core/lib/security/security_connector/security_connector.h"
 #include "src/core/lib/slice/slice_string_helpers.h"
 #include "src/core/tsi/ssl_transport_security.h"
 #include "src/core/tsi/transport_security.h"
@@ -341,6 +340,21 @@ static grpc_ssl_roots_override_result override_roots_permanent_failure(
   return GRPC_SSL_ROOTS_OVERRIDE_FAIL_PERMANENTLY;
 }
 
+namespace grpc_core {
+namespace {
+
+class TestDefafaultSllRootStore : public DefaultSslRootStore {
+ public:
+  static grpc_slice ComputePemRootCertsForTesting() {
+    return ComputePemRootCerts();
+  }
+};
+
+}  // namespace
+}  // namespace grpc_core
+
+// TODO: Convert this test to C++ test when security_connector implementation
+// is converted to C++.
 static void test_default_ssl_roots(void) {
   const char* roots_for_env_var = "roots for env var";
 
@@ -354,7 +368,8 @@ static void test_default_ssl_roots(void) {
      value. */
   gpr_setenv(GRPC_DEFAULT_SSL_ROOTS_FILE_PATH_ENV_VAR, "");
   grpc_set_ssl_roots_override_callback(override_roots_success);
-  grpc_slice roots = grpc_get_default_ssl_roots_for_testing();
+  grpc_slice roots =
+      grpc_core::TestDefafaultSllRootStore::ComputePemRootCertsForTesting();
   char* roots_contents = grpc_slice_to_c_string(roots);
   grpc_slice_unref(roots);
   GPR_ASSERT(strcmp(roots_contents, roots_for_override_api) == 0);
@@ -363,7 +378,7 @@ static void test_default_ssl_roots(void) {
   /* Now let's set the env var: We should get the contents pointed value
      instead. */
   gpr_setenv(GRPC_DEFAULT_SSL_ROOTS_FILE_PATH_ENV_VAR, roots_env_var_file_path);
-  roots = grpc_get_default_ssl_roots_for_testing();
+  roots = grpc_core::TestDefafaultSllRootStore::ComputePemRootCertsForTesting();
   roots_contents = grpc_slice_to_c_string(roots);
   grpc_slice_unref(roots);
   GPR_ASSERT(strcmp(roots_contents, roots_for_env_var) == 0);
@@ -372,7 +387,7 @@ static void test_default_ssl_roots(void) {
   /* Now reset the env var. We should fall back to the value overridden using
      the api. */
   gpr_setenv(GRPC_DEFAULT_SSL_ROOTS_FILE_PATH_ENV_VAR, "");
-  roots = grpc_get_default_ssl_roots_for_testing();
+  roots = grpc_core::TestDefafaultSllRootStore::ComputePemRootCertsForTesting();
   roots_contents = grpc_slice_to_c_string(roots);
   grpc_slice_unref(roots);
   GPR_ASSERT(strcmp(roots_contents, roots_for_override_api) == 0);
@@ -381,8 +396,11 @@ static void test_default_ssl_roots(void) {
   /* Now setup a permanent failure for the overridden roots and we should get
      an empty slice. */
   grpc_set_ssl_roots_override_callback(override_roots_permanent_failure);
-  roots = grpc_get_default_ssl_roots_for_testing();
+  roots = grpc_core::TestDefafaultSllRootStore::ComputePemRootCertsForTesting();
   GPR_ASSERT(GRPC_SLICE_IS_EMPTY(roots));
+  const tsi_ssl_root_certs_store* root_store =
+      grpc_core::TestDefafaultSllRootStore::GetRootStore();
+  GPR_ASSERT(root_store == nullptr);
 
   /* Cleanup. */
   remove(roots_env_var_file_path);

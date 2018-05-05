@@ -18,9 +18,11 @@
 
 /* Microbenchmarks around CHTTP2 HPACK operations */
 
+#include <benchmark/benchmark.h>
 #include <grpc/support/alloc.h>
 #include <grpc/support/log.h>
 #include <string.h>
+#include <memory>
 #include <sstream>
 
 #include "src/core/ext/transport/chttp2/transport/hpack_encoder.h"
@@ -31,7 +33,6 @@
 #include "src/core/lib/transport/timeout_encoding.h"
 
 #include "test/cpp/microbenchmarks/helpers.h"
-#include "third_party/benchmark/include/benchmark/benchmark.h"
 
 auto& force_library_initialization = Library::get();
 
@@ -51,10 +52,11 @@ static grpc_slice MakeSlice(std::vector<uint8_t> bytes) {
 static void BM_HpackEncoderInitDestroy(benchmark::State& state) {
   TrackCounters track_counters;
   grpc_core::ExecCtx exec_ctx;
-  grpc_chttp2_hpack_compressor c;
+  std::unique_ptr<grpc_chttp2_hpack_compressor> c(
+      new grpc_chttp2_hpack_compressor);
   while (state.KeepRunning()) {
-    grpc_chttp2_hpack_compressor_init(&c);
-    grpc_chttp2_hpack_compressor_destroy(&c);
+    grpc_chttp2_hpack_compressor_init(c.get());
+    grpc_chttp2_hpack_compressor_destroy(c.get());
     grpc_core::ExecCtx::Get()->Flush();
   }
 
@@ -71,8 +73,9 @@ static void BM_HpackEncoderEncodeDeadline(benchmark::State& state) {
   grpc_metadata_batch_init(&b);
   b.deadline = saved_now + 30 * 1000;
 
-  grpc_chttp2_hpack_compressor c;
-  grpc_chttp2_hpack_compressor_init(&c);
+  std::unique_ptr<grpc_chttp2_hpack_compressor> c(
+      new grpc_chttp2_hpack_compressor);
+  grpc_chttp2_hpack_compressor_init(c.get());
   grpc_transport_one_way_stats stats;
   memset(&stats, 0, sizeof(stats));
   grpc_slice_buffer outbuf;
@@ -82,15 +85,15 @@ static void BM_HpackEncoderEncodeDeadline(benchmark::State& state) {
         static_cast<uint32_t>(state.iterations()),
         true,
         false,
-        (size_t)1024,
+        static_cast<size_t>(1024),
         &stats,
     };
-    grpc_chttp2_encode_header(&c, nullptr, 0, &b, &hopt, &outbuf);
+    grpc_chttp2_encode_header(c.get(), nullptr, 0, &b, &hopt, &outbuf);
     grpc_slice_buffer_reset_and_unref_internal(&outbuf);
     grpc_core::ExecCtx::Get()->Flush();
   }
   grpc_metadata_batch_destroy(&b);
-  grpc_chttp2_hpack_compressor_destroy(&c);
+  grpc_chttp2_hpack_compressor_destroy(c.get());
   grpc_slice_buffer_destroy_internal(&outbuf);
 
   std::ostringstream label;
@@ -120,8 +123,9 @@ static void BM_HpackEncoderEncodeHeader(benchmark::State& state) {
         "addmd", grpc_metadata_batch_add_tail(&b, &storage[i], elems[i])));
   }
 
-  grpc_chttp2_hpack_compressor c;
-  grpc_chttp2_hpack_compressor_init(&c);
+  std::unique_ptr<grpc_chttp2_hpack_compressor> c(
+      new grpc_chttp2_hpack_compressor);
+  grpc_chttp2_hpack_compressor_init(c.get());
   grpc_transport_one_way_stats stats;
   memset(&stats, 0, sizeof(stats));
   grpc_slice_buffer outbuf;
@@ -131,10 +135,10 @@ static void BM_HpackEncoderEncodeHeader(benchmark::State& state) {
         static_cast<uint32_t>(state.iterations()),
         state.range(0) != 0,
         Fixture::kEnableTrueBinary,
-        (size_t)state.range(1),
+        static_cast<size_t>(state.range(1)),
         &stats,
     };
-    grpc_chttp2_encode_header(&c, nullptr, 0, &b, &hopt, &outbuf);
+    grpc_chttp2_encode_header(c.get(), nullptr, 0, &b, &hopt, &outbuf);
     if (!logged_representative_output && state.iterations() > 3) {
       logged_representative_output = true;
       for (size_t i = 0; i < outbuf.count; i++) {
@@ -147,7 +151,7 @@ static void BM_HpackEncoderEncodeHeader(benchmark::State& state) {
     grpc_core::ExecCtx::Get()->Flush();
   }
   grpc_metadata_batch_destroy(&b);
-  grpc_chttp2_hpack_compressor_destroy(&c);
+  grpc_chttp2_hpack_compressor_destroy(c.get());
   grpc_slice_buffer_destroy_internal(&outbuf);
 
   std::ostringstream label;
@@ -777,7 +781,8 @@ static void OnHeaderNew(void* user_data, grpc_mdelem md) {
       if (GRPC_MDELEM_IS_INTERNED(md)) {
         /* not already parsed: parse it now, and store the
          * result away */
-        cached_timeout = (grpc_millis*)gpr_malloc(sizeof(grpc_millis));
+        cached_timeout =
+            static_cast<grpc_millis*>(gpr_malloc(sizeof(grpc_millis)));
         *cached_timeout = timeout;
         grpc_mdelem_set_user_data(md, free_timeout, cached_timeout);
       }
